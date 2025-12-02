@@ -1,0 +1,7 @@
+{
+  "name": "Mustafa AI uygulaması",
+  "description": "An advanced chat interface to explore the capabilities of the Gemini 3 Pro model, featuring thinking budget controls.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
