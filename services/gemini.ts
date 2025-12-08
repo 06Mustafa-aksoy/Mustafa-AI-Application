@@ -1,7 +1,7 @@
 import { GoogleGenAI, Content, Part } from "@google/genai";
 import { GeminiConfig, Message, Attachment } from "../types";
 
-// API Key kontrolü (Genellikle env dosyasından gelir)
+
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 /**
@@ -18,7 +18,7 @@ export const generateContentStream = async function* (
   config: GeminiConfig
 ): AsyncGenerator<string, void, unknown> {
   try {
-    // 1. GÜNCEL TARİHİ AL (Dinamik olarak)
+  
     const currentDate = new Date().toLocaleDateString("tr-TR", { 
         weekday: 'long', 
         year: 'numeric', 
@@ -26,8 +26,6 @@ export const generateContentStream = async function* (
         day: 'numeric' 
     });
 
-    // 2. SİSTEM TALİMATINI HAZIRLA (Modelin kimliği ve tarih)
-    // Modelin kafasının karışmaması için instruction'ı İngilizce verip Türkçe konuşmasını istemek genelde daha stabil çalışır.
     const systemInstruction = `
       You are Gemini 3.0 Pro, a next-generation AI model created by Google.
       Today's date is ${currentDate}.
