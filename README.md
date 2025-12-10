@@ -1,1 +1,1 @@
-
+// Creating a customized AI application that is used Gemini 3.0 Pro. This application covers all the extensions such as xml, js, ts, py, html, css, md, csv, json and xlsx. It provides user-based answers as well.
