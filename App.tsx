@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, ChatSession, Attachment } from './types';
 import { generateContentStream } from './services/gemini';
+import { saveSessionsToDB, loadSessionsFromDB } from './services/storage';
 import ChatMessage from './components/ChatMessage';
 import InputArea from './components/InputArea';
 import SettingsPanel from './components/SettingsPanel';
@@ -8,53 +9,11 @@ import Sidebar from './components/Sidebar';
 
 const App: React.FC = () => {
   // State for multiple sessions
-  const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    const savedSessions = localStorage.getItem('gemini_sessions');
-    if (savedSessions) {
-      return JSON.parse(savedSessions);
-    }
-    
-    // Migration: Recover data from the old single-history format
-    const oldHistory = localStorage.getItem('gemini_chat_history');
-    if (oldHistory) {
-      try {
-        const messages: Message[] = JSON.parse(oldHistory);
-        if (messages.length > 0) {
-          const recoveredSession: ChatSession = {
-            id: Date.now().toString(),
-            title: messages[0].text.slice(0, 30) + (messages[0].text.length > 30 ? '...' : ''),
-            messages: messages,
-            createdAt: Date.now()
-          };
-          return [recoveredSession];
-        }
-      } catch (e) {
-        console.error("Failed to migrate old history", e);
-      }
-    }
-    return [];
-  });
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [isStorageInitialized, setIsStorageInitialized] = useState(false);
 
   // ID of the currently active session. Null means we are in "New Chat" mode.
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => {
-    const savedSessions = localStorage.getItem('gemini_sessions');
-    if (savedSessions) {
-      const parsed: ChatSession[] = JSON.parse(savedSessions);
-      if (parsed.length > 0) return parsed[parsed.length - 1].id;
-    }
-    const oldHistory = localStorage.getItem('gemini_chat_history');
-    if (oldHistory && JSON.parse(oldHistory).length > 0) {
-        return null;
-    }
-    return null;
-  });
-
-  // Ensure if we migrated data but currentSessionId is null, we select it.
-  useEffect(() => {
-    if (currentSessionId === null && sessions.length > 0) {
-        setCurrentSessionId(sessions[sessions.length - 1].id);
-    }
-  }, []);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingBudget, setThinkingBudget] = useState(0);
@@ -75,10 +34,77 @@ const App: React.FC = () => {
     scrollToBottom();
   }, [messages, isLoading]);
 
-  // Persist sessions to localStorage
+  // Load sessions from IndexedDB on mount
   useEffect(() => {
-    localStorage.setItem('gemini_sessions', JSON.stringify(sessions));
-  }, [sessions]);
+    const initStorage = async () => {
+      try {
+        let loadedSessions = await loadSessionsFromDB();
+        
+        // Migration: If DB is empty, check localStorage (legacy data)
+        if (loadedSessions.length === 0) {
+          const localSessions = localStorage.getItem('gemini_sessions');
+          if (localSessions) {
+            try {
+              const parsed = JSON.parse(localSessions);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                loadedSessions = parsed;
+                // Save to DB immediately to complete migration
+                await saveSessionsToDB(loadedSessions);
+              }
+            } catch (e) {
+              console.error("Failed to parse legacy localStorage sessions", e);
+            }
+          }
+          
+          // Second Migration Check: Very old single-history format
+          if (loadedSessions.length === 0) {
+            const oldHistory = localStorage.getItem('gemini_chat_history');
+            if (oldHistory) {
+              try {
+                const messages: Message[] = JSON.parse(oldHistory);
+                if (messages.length > 0) {
+                  const recoveredSession: ChatSession = {
+                    id: Date.now().toString(),
+                    title: messages[0].text.slice(0, 30) + (messages[0].text.length > 30 ? '...' : ''),
+                    messages: messages,
+                    createdAt: Date.now()
+                  };
+                  loadedSessions = [recoveredSession];
+                  await saveSessionsToDB(loadedSessions);
+                }
+              } catch (e) {
+                console.error("Failed to migrate old history", e);
+              }
+            }
+          }
+        }
+
+        setSessions(loadedSessions);
+        
+        // Restore last active session if available
+        if (loadedSessions.length > 0) {
+           setCurrentSessionId(loadedSessions[loadedSessions.length - 1].id);
+        }
+      } catch (error) {
+        console.error("Storage initialization failed:", error);
+      } finally {
+        setIsStorageInitialized(true);
+      }
+    };
+
+    initStorage();
+  }, []);
+
+  // Persist sessions to IndexedDB when they change (Debounced)
+  useEffect(() => {
+    if (!isStorageInitialized) return;
+
+    const timeoutId = setTimeout(() => {
+      saveSessionsToDB(sessions).catch(e => console.error("Failed to save sessions", e));
+    }, 1000); // 1-second debounce to avoid excessive writes during streaming
+
+    return () => clearTimeout(timeoutId);
+  }, [sessions, isStorageInitialized]);
 
   const handleNewChat = () => {
     setCurrentSessionId(null);
@@ -93,6 +119,12 @@ const App: React.FC = () => {
     if (currentSessionId === id) {
       setCurrentSessionId(null);
     }
+  };
+
+  const handleRenameSession = (id: string, newTitle: string) => {
+    setSessions(prevSessions => prevSessions.map(session => 
+      session.id === id ? { ...session, title: newTitle } : session
+    ));
   };
 
   const handleSelectSession = (id: string) => {
@@ -203,6 +235,17 @@ const App: React.FC = () => {
     }
   };
 
+  if (!isStorageInitialized) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-900 text-slate-100">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin"></div>
+          <p className="text-slate-400 font-medium">Loading history...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-slate-900 text-slate-100 font-sans">
       
@@ -213,6 +256,7 @@ const App: React.FC = () => {
         onSelectSession={handleSelectSession}
         onNewChat={handleNewChat}
         onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
       />
