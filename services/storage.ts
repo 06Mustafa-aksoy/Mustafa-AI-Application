@@ -1,67 +1,74 @@
+import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { ChatSession } from "../types";
 
 const DB_NAME = 'GeminiAppDB';
-const STORE_NAME = 'sessions';
-const DB_VERSION = 1;
-const STORAGE_KEY = 'all_sessions';
+const STORE_NAME = 'chat_sessions';
+const DB_VERSION = 2;
 
-/**
- * Opens (or creates) the IndexedDB database.
- */
-const openDB = (): Promise<IDBDatabase> => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+interface GeminiDB extends DBSchema {
+  chat_sessions: {
+    key: string;
+    value: ChatSession;
+  };
+  // Definitions for legacy migration support
+  sessions: {
+    key: string;
+    value: ChatSession[];
+  };
+}
 
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
-      }
-    };
+let dbPromise: Promise<IDBPDatabase<GeminiDB>>;
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error(`IndexedDB error: ${request.error?.message}`));
-  });
-};
+const initDB = () => {
+  if (!dbPromise) {
+    dbPromise = openDB<GeminiDB>(DB_NAME, DB_VERSION, {
+      upgrade(db, oldVersion, newVersion, transaction) {
+        // 1. Create New Store if not exists
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        }
 
-/**
- * Saves the entire sessions array to IndexedDB.
- */
-export const saveSessionsToDB = async (sessions: ChatSession[]): Promise<void> => {
-  try {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.put(sessions, STORAGE_KEY);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(new Error(`Failed to save sessions: ${request.error?.message}`));
+        // 2. Migration: Recover data from old store if exists
+        if (oldVersion < 2 && db.objectStoreNames.contains('sessions')) {
+          const oldStore = transaction.objectStore('sessions');
+          oldStore.get('all_sessions').then((oldData) => {
+            if (Array.isArray(oldData)) {
+              console.log("Migrating old data to new format...");
+              const newStore = transaction.objectStore(STORE_NAME);
+              oldData.forEach((session) => {
+                newStore.put(session);
+              });
+            }
+          }).catch(err => console.error("Migration error:", err));
+        }
+      },
     });
-  } catch (error) {
-    console.error("Error saving to IndexedDB:", error);
-    throw error;
   }
+  return dbPromise;
 };
 
-/**
- * Loads the sessions array from IndexedDB.
- */
 export const loadSessionsFromDB = async (): Promise<ChatSession[]> => {
-  try {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readonly');
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(STORAGE_KEY);
+  const db = await initDB();
+  const sessions = await db.getAll(STORE_NAME);
+  // Sort by creation date
+  return sessions.sort((a, b) => a.createdAt - b.createdAt);
+};
 
-      request.onsuccess = () => {
-        resolve(request.result || []);
-      };
-      request.onerror = () => reject(new Error(`Failed to load sessions: ${request.error?.message}`));
-    });
-  } catch (error) {
-    console.error("Error loading from IndexedDB:", error);
-    return [];
-  }
+export const saveSessionsToDB = async (sessions: ChatSession[]): Promise<void> => {
+  const db = await initDB();
+  const tx = db.transaction(STORE_NAME, 'readwrite');
+  const store = tx.objectStore(STORE_NAME);
+  
+  // Get all existing keys to identify deleted sessions
+  const existingKeys = await store.getAllKeys();
+  const newSessionIds = new Set(sessions.map(s => s.id));
+  
+  const deletePromises = existingKeys
+    .filter(key => !newSessionIds.has(key as string))
+    .map(key => store.delete(key as string));
+    
+  const putPromises = sessions.map(session => store.put(session));
+  
+  await Promise.all([...deletePromises, ...putPromises]);
+  await tx.done;
 };

@@ -40,43 +40,19 @@ const App: React.FC = () => {
       try {
         let loadedSessions = await loadSessionsFromDB();
         
-        // Migration: If DB is empty, check localStorage (legacy data)
+        // Migration check for very old localStorage data if DB is empty
         if (loadedSessions.length === 0) {
-          const localSessions = localStorage.getItem('gemini_sessions');
-          if (localSessions) {
-            try {
-              const parsed = JSON.parse(localSessions);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                loadedSessions = parsed;
-                // Save to DB immediately to complete migration
-                await saveSessionsToDB(loadedSessions);
-              }
-            } catch (e) {
-              console.error("Failed to parse legacy localStorage sessions", e);
-            }
-          }
-          
-          // Second Migration Check: Very old single-history format
-          if (loadedSessions.length === 0) {
-            const oldHistory = localStorage.getItem('gemini_chat_history');
-            if (oldHistory) {
-              try {
-                const messages: Message[] = JSON.parse(oldHistory);
-                if (messages.length > 0) {
-                  const recoveredSession: ChatSession = {
-                    id: Date.now().toString(),
-                    title: messages[0].text.slice(0, 30) + (messages[0].text.length > 30 ? '...' : ''),
-                    messages: messages,
-                    createdAt: Date.now()
-                  };
-                  loadedSessions = [recoveredSession];
-                  await saveSessionsToDB(loadedSessions);
-                }
-              } catch (e) {
-                console.error("Failed to migrate old history", e);
-              }
-            }
-          }
+           const localSessions = localStorage.getItem('gemini_sessions');
+           if (localSessions) {
+             try {
+               const parsed = JSON.parse(localSessions);
+               if (Array.isArray(parsed) && parsed.length > 0) {
+                 loadedSessions = parsed;
+                 // Save to DB immediately to persist migration
+                 await saveSessionsToDB(loadedSessions);
+               }
+             } catch (e) { /* ignore */ }
+           }
         }
 
         setSessions(loadedSessions);
@@ -99,9 +75,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isStorageInitialized) return;
 
+    // Save changes with a shorter debounce to prevent data loss on tab close
     const timeoutId = setTimeout(() => {
       saveSessionsToDB(sessions).catch(e => console.error("Failed to save sessions", e));
-    }, 1000); // 1-second debounce to avoid excessive writes during streaming
+    }, 500);
 
     return () => clearTimeout(timeoutId);
   }, [sessions, isStorageInitialized]);
@@ -176,8 +153,6 @@ const App: React.FC = () => {
 
     try {
       // Use the streaming generator
-      // Pass 'currentHistory' (previous messages) so the model context is correct.
-      // 'text' and 'attachments' form the new content.
       const stream = generateContentStream(text, attachments, currentHistory, { thinkingBudget });
       
       let accumulatedText = "";
