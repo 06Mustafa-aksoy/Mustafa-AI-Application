@@ -10,8 +10,7 @@ interface GeminiDB extends DBSchema {
     key: string;
     value: ChatSession;
   };
-  // Definitions for legacy migration support
-  sessions: {
+  sessions: { // Eski veri tipi (Migration için)
     key: string;
     value: ChatSession[];
   };
@@ -23,23 +22,21 @@ const initDB = () => {
   if (!dbPromise) {
     dbPromise = openDB<GeminiDB>(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion, newVersion, transaction) {
-        // 1. Create New Store if not exists
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           db.createObjectStore(STORE_NAME, { keyPath: 'id' });
         }
-
-        // 2. Migration: Recover data from old store if exists
+        // Migration: Eski veriyi kurtarma
         if (oldVersion < 2 && db.objectStoreNames.contains('sessions')) {
           const oldStore = transaction.objectStore('sessions');
           oldStore.get('all_sessions').then((oldData) => {
             if (Array.isArray(oldData)) {
-              console.log("Migrating old data to new format...");
+              console.log("Eski veriler kurtarılıyor...");
               const newStore = transaction.objectStore(STORE_NAME);
               oldData.forEach((session) => {
                 newStore.put(session);
               });
             }
-          }).catch(err => console.error("Migration error:", err));
+          });
         }
       },
     });
@@ -47,28 +44,36 @@ const initDB = () => {
   return dbPromise;
 };
 
+// --- GÜVENLİ METODLAR ---
+
 export const loadSessionsFromDB = async (): Promise<ChatSession[]> => {
-  const db = await initDB();
-  const sessions = await db.getAll(STORE_NAME);
-  // Sort by creation date
-  return sessions.sort((a, b) => a.createdAt - b.createdAt);
+  try {
+    const db = await initDB();
+    const sessions = await db.getAll(STORE_NAME);
+    // En yeni tarihli en üstte olacak şekilde sırala
+    return sessions.sort((a, b) => b.createdAt - a.createdAt);
+  } catch (error) {
+    console.error("Yükleme hatası:", error);
+    return [];
+  }
 };
 
-export const saveSessionsToDB = async (sessions: ChatSession[]): Promise<void> => {
-  const db = await initDB();
-  const tx = db.transaction(STORE_NAME, 'readwrite');
-  const store = tx.objectStore(STORE_NAME);
-  
-  // Get all existing keys to identify deleted sessions
-  const existingKeys = await store.getAllKeys();
-  const newSessionIds = new Set(sessions.map(s => s.id));
-  
-  const deletePromises = existingKeys
-    .filter(key => !newSessionIds.has(key as string))
-    .map(key => store.delete(key as string));
-    
-  const putPromises = sessions.map(session => store.put(session));
-  
-  await Promise.all([...deletePromises, ...putPromises]);
-  await tx.done;
+// TEKİL KAYDETME: Sadece gönderilen session'ı günceller. Diğerlerini silmez.
+export const saveSessionToDB = async (session: ChatSession): Promise<void> => {
+  try {
+    const db = await initDB();
+    await db.put(STORE_NAME, session);
+  } catch (error) {
+    console.error("Kaydetme hatası:", error);
+  }
+};
+
+// TEKİL SİLME: Sadece bu ID'yi siler.
+export const deleteSessionFromDB = async (id: string): Promise<void> => {
+  try {
+    const db = await initDB();
+    await db.delete(STORE_NAME, id);
+  } catch (error) {
+    console.error("Silme hatası:", error);
+  }
 };

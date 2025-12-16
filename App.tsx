@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, ChatSession, Attachment } from './types';
 import { generateContentStream } from './services/gemini';
-import { saveSessionsToDB, loadSessionsFromDB } from './services/storage';
+import { loadSessionsFromDB, saveSessionToDB, deleteSessionFromDB } from './services/storage';
 import ChatMessage from './components/ChatMessage';
 import InputArea from './components/InputArea';
 import SettingsPanel from './components/SettingsPanel';
@@ -34,13 +34,13 @@ const App: React.FC = () => {
     scrollToBottom();
   }, [messages, isLoading]);
 
-  // Load sessions from IndexedDB on mount
+  // 1. Uygulama açılışında verileri yükle
   useEffect(() => {
     const initStorage = async () => {
       try {
         let loadedSessions = await loadSessionsFromDB();
         
-        // Migration check for very old localStorage data if DB is empty
+        // Eğer DB boşsa ve LocalStorage'da eski veri varsa kurtar (Migration)
         if (loadedSessions.length === 0) {
            const localSessions = localStorage.getItem('gemini_sessions');
            if (localSessions) {
@@ -48,8 +48,10 @@ const App: React.FC = () => {
                const parsed = JSON.parse(localSessions);
                if (Array.isArray(parsed) && parsed.length > 0) {
                  loadedSessions = parsed;
-                 // Save to DB immediately to persist migration
-                 await saveSessionsToDB(loadedSessions);
+                 // Hepsini tek tek yeni DB'ye aktar
+                 for (const s of loadedSessions) {
+                    await saveSessionToDB(s);
+                 }
                }
              } catch (e) { /* ignore */ }
            }
@@ -57,12 +59,12 @@ const App: React.FC = () => {
 
         setSessions(loadedSessions);
         
-        // Restore last active session if available
+        // Eğer eski oturum varsa en sonuncusunu aç
         if (loadedSessions.length > 0) {
-           setCurrentSessionId(loadedSessions[loadedSessions.length - 1].id);
+           setCurrentSessionId(loadedSessions[0].id); 
         }
       } catch (error) {
-        console.error("Storage initialization failed:", error);
+        console.error("Başlatma hatası:", error);
       } finally {
         setIsStorageInitialized(true);
       }
@@ -71,37 +73,45 @@ const App: React.FC = () => {
     initStorage();
   }, []);
 
-  // Persist sessions to IndexedDB when they change (Debounced)
-  useEffect(() => {
-    if (!isStorageInitialized) return;
-
-    // Save changes with a shorter debounce to prevent data loss on tab close
-    const timeoutId = setTimeout(() => {
-      saveSessionsToDB(sessions).catch(e => console.error("Failed to save sessions", e));
-    }, 500);
-
-    return () => clearTimeout(timeoutId);
-  }, [sessions, isStorageInitialized]);
+  // --- ARTIK OTOMATİK KAYDETME YAPAN USEEFFECT YOK ---
+  // Veri kaybını önlemek için kaydetme işlemlerini aşağıda manuel yapıyoruz.
 
   const handleNewChat = () => {
     setCurrentSessionId(null);
     setIsLoading(false);
-    setIsSidebarOpen(false); // Close sidebar on mobile
+    setIsSidebarOpen(false);
   };
 
-  const handleDeleteSession = (id: string, e: React.MouseEvent) => {
+  const handleDeleteSession = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    // 1. State'den sil
     const newSessions = sessions.filter(s => s.id !== id);
     setSessions(newSessions);
+    
     if (currentSessionId === id) {
       setCurrentSessionId(null);
     }
+    
+    // 2. Veritabanından sil
+    await deleteSessionFromDB(id);
   };
 
-  const handleRenameSession = (id: string, newTitle: string) => {
-    setSessions(prevSessions => prevSessions.map(session => 
-      session.id === id ? { ...session, title: newTitle } : session
-    ));
+  const handleRenameSession = async (id: string, newTitle: string) => {
+    let updatedSession: ChatSession | undefined;
+    
+    // 1. State güncelle
+    setSessions(prevSessions => prevSessions.map(session => {
+      if (session.id === id) {
+        updatedSession = { ...session, title: newTitle };
+        return updatedSession;
+      }
+      return session;
+    }));
+
+    // 2. Veritabanına kaydet
+    if (updatedSession) {
+        await saveSessionToDB(updatedSession);
+    }
   };
 
   const handleSelectSession = (id: string) => {
@@ -111,10 +121,10 @@ const App: React.FC = () => {
 
   const handleSendMessage = async (text: string, attachments: Attachment[] = []) => {
     let activeSessionId = currentSessionId;
-    let currentHistory = messages; // This is the history BEFORE the new message
-    let newSessions = [...sessions];
+    let currentHistory = messages; 
+    let workingSession: ChatSession | undefined;
 
-    // If no active session, create one now
+    // A) Eğer aktif bir session yoksa YENİ OLUŞTUR
     if (!activeSessionId) {
       const titleText = text || (attachments.length > 0 ? `Image Analysis` : 'New Chat');
       const newSession: ChatSession = {
@@ -124,13 +134,18 @@ const App: React.FC = () => {
         createdAt: Date.now(),
       };
       activeSessionId = newSession.id;
-      newSessions.push(newSession);
-      setSessions(newSessions); 
+      
+      // State'e ekle
+      setSessions(prev => [newSession, ...prev]);
       setCurrentSessionId(activeSessionId);
       currentHistory = [];
+      workingSession = newSession;
+    } else {
+        // Var olan session'ı bul
+        workingSession = sessions.find(s => s.id === activeSessionId);
     }
 
-    // Add user message to state
+    // B) Kullanıcı mesajını hazırla
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -139,32 +154,41 @@ const App: React.FC = () => {
       timestamp: Date.now(),
     };
 
-    // This is the history including the user message, for UI display
     const updatedHistoryForUI = [...currentHistory, userMessage];
 
-    // Update sessions state with user message
+    // C) State'i güncelle (Kullanıcı mesajı ekranda görünsün)
     setSessions(prevSessions => prevSessions.map(session => 
       session.id === activeSessionId 
         ? { ...session, messages: updatedHistoryForUI }
         : session
     ));
 
+    // D) VERİTABANINA KAYDET (Kullanıcı mesajı kaybolmasın diye hemen yazıyoruz)
+    if (workingSession) {
+        await saveSessionToDB({
+            ...workingSession,
+            id: activeSessionId, // Typescript uyarısı için garanti olsun
+            messages: updatedHistoryForUI,
+            updatedAt: Date.now()
+        });
+    }
+
     setIsLoading(true);
 
     try {
-      // Use the streaming generator
+      // API'ye istek at
       const stream = generateContentStream(text, attachments, currentHistory, { thinkingBudget });
       
       let accumulatedText = "";
       let aiMessageId = (Date.now() + 1).toString();
       let isFirstChunk = true;
 
+      // Stream döngüsü (Sadece UI günceller, DB'yi yormaz)
       for await (const chunk of stream) {
         accumulatedText += chunk;
 
         if (isFirstChunk) {
             isFirstChunk = false;
-            // Append the new AI message with the first chunk
             const aiMessage: Message = {
                 id: aiMessageId,
                 role: 'model',
@@ -178,7 +202,6 @@ const App: React.FC = () => {
                 : session
             ));
         } else {
-            // Update the existing AI message text
              setSessions(prevSessions => prevSessions.map(session => 
                 session.id === activeSessionId 
                 ? { 
@@ -192,6 +215,31 @@ const App: React.FC = () => {
         }
       }
       
+      // E) CEVAP BİTTİ -> SON HALİNİ DB'YE KAYDET
+      // Bu adım ertesi gün geldiğinde konuşmanın hatırlanmasını sağlayan kritik adımdır.
+      const finalAiMessage: Message = {
+          id: aiMessageId,
+          role: 'model',
+          text: accumulatedText,
+          timestamp: Date.now()
+      };
+
+      // Session'ın son halini oluştur
+      // Not: State güncellemesi asenkron olduğu için 'workingSession' üzerinden değil
+      // elimizdeki verilerle yeni obje oluşturup kaydediyoruz.
+      const currentTitle = sessions.find(s => s.id === activeSessionId)?.title || workingSession?.title || 'Chat';
+      const currentCreatedAt = sessions.find(s => s.id === activeSessionId)?.createdAt || workingSession?.createdAt || Date.now();
+
+      const finalSessionState: ChatSession = {
+          id: activeSessionId!,
+          title: currentTitle,
+          createdAt: currentCreatedAt,
+          messages: [...updatedHistoryForUI, finalAiMessage],
+          updatedAt: Date.now()
+      };
+
+      await saveSessionToDB(finalSessionState);
+
     } catch (error: any) {
       const errorMessage: Message = {
         id: (Date.now() + 2).toString(),
@@ -200,11 +248,24 @@ const App: React.FC = () => {
         timestamp: Date.now(),
         isError: true,
       };
+      
+      // Hata mesajını state'e ekle
       setSessions(prevSessions => prevSessions.map(session => 
         session.id === activeSessionId 
           ? { ...session, messages: [...updatedHistoryForUI, errorMessage] }
           : session
       ));
+
+      // Hatayı da DB'ye kaydet
+      if (activeSessionId) {
+          const s = sessions.find(s => s.id === activeSessionId);
+          if (s) {
+              await saveSessionToDB({
+                  ...s,
+                  messages: [...updatedHistoryForUI, errorMessage]
+              });
+          }
+      }
     } finally {
       setIsLoading(false);
     }
@@ -224,7 +285,6 @@ const App: React.FC = () => {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-900 text-slate-100 font-sans">
       
-      {/* Sidebar */}
       <Sidebar 
         sessions={sessions}
         currentSessionId={currentSessionId}
@@ -236,10 +296,8 @@ const App: React.FC = () => {
         onClose={() => setIsSidebarOpen(false)}
       />
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col h-full relative w-full">
         
-        {/* Header */}
         <header className="flex-none h-16 border-b border-slate-800 flex items-center justify-between px-4 sm:px-6 bg-slate-900/90 backdrop-blur z-20">
           <div className="flex items-center gap-3">
              <button 
@@ -289,7 +347,6 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Chat Area */}
         <main className="flex-1 overflow-y-auto relative custom-scrollbar">
           <div className="max-w-4xl mx-auto px-4 py-8">
             {messages.length === 0 ? (
@@ -341,11 +398,6 @@ const App: React.FC = () => {
                   <ChatMessage key={msg.id} message={msg} />
                 ))}
                 
-                {/* 
-                  Thinking Indicator:
-                  Displays when loading and the model has not yet responded (last message is User).
-                  Disappears automatically when the model's message starts streaming.
-                */}
                 {isLoading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
                   <div className="flex w-full mb-6 justify-start">
                      <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-bl-none px-5 py-4 bg-slate-800 border border-slate-700 shadow-md">
@@ -365,13 +417,11 @@ const App: React.FC = () => {
           </div>
         </main>
 
-        {/* Input Area */}
         <div className="flex-none bg-gradient-to-t from-slate-900 via-slate-900 to-transparent pt-6 pb-2 px-4">
            <InputArea onSendMessage={handleSendMessage} isLoading={isLoading} />
         </div>
       </div>
 
-      {/* Settings Modal */}
       <SettingsPanel 
         thinkingBudget={thinkingBudget}
         setThinkingBudget={setThinkingBudget}
@@ -379,7 +429,6 @@ const App: React.FC = () => {
         toggleOpen={() => setIsSettingsOpen(!isSettingsOpen)}
       />
       
-      {/* Overlay for mobile settings */}
       {isSettingsOpen && (
         <div 
           className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
