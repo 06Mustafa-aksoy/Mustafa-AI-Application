@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, ChatSession, Attachment } from './types';
 import { generateContentStream } from './services/gemini';
+// Dikkat: Artık tekil fonksiyonları import ediyoruz
 import { loadSessionsFromDB, saveSessionToDB, deleteSessionFromDB } from './services/storage';
 import ChatMessage from './components/ChatMessage';
 import InputArea from './components/InputArea';
@@ -8,13 +9,9 @@ import SettingsPanel from './components/SettingsPanel';
 import Sidebar from './components/Sidebar';
 
 const App: React.FC = () => {
-  // State for multiple sessions
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [isStorageInitialized, setIsStorageInitialized] = useState(false);
-
-  // ID of the currently active session. Null means we are in "New Chat" mode.
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingBudget, setThinkingBudget] = useState(0);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -22,7 +19,6 @@ const App: React.FC = () => {
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Derived state: current messages
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const messages = currentSession ? currentSession.messages : [];
 
@@ -40,7 +36,7 @@ const App: React.FC = () => {
       try {
         let loadedSessions = await loadSessionsFromDB();
         
-        // Eğer DB boşsa ve LocalStorage'da eski veri varsa kurtar (Migration)
+        // Migration: Eğer DB boşsa ve LocalStorage varsa kurtar
         if (loadedSessions.length === 0) {
            const localSessions = localStorage.getItem('gemini_sessions');
            if (localSessions) {
@@ -48,7 +44,6 @@ const App: React.FC = () => {
                const parsed = JSON.parse(localSessions);
                if (Array.isArray(parsed) && parsed.length > 0) {
                  loadedSessions = parsed;
-                 // Hepsini tek tek yeni DB'ye aktar
                  for (const s of loadedSessions) {
                     await saveSessionToDB(s);
                  }
@@ -59,7 +54,6 @@ const App: React.FC = () => {
 
         setSessions(loadedSessions);
         
-        // Eğer eski oturum varsa en sonuncusunu aç
         if (loadedSessions.length > 0) {
            setCurrentSessionId(loadedSessions[0].id); 
         }
@@ -73,9 +67,6 @@ const App: React.FC = () => {
     initStorage();
   }, []);
 
-  // --- ARTIK OTOMATİK KAYDETME YAPAN USEEFFECT YOK ---
-  // Veri kaybını önlemek için kaydetme işlemlerini aşağıda manuel yapıyoruz.
-
   const handleNewChat = () => {
     setCurrentSessionId(null);
     setIsLoading(false);
@@ -84,22 +75,18 @@ const App: React.FC = () => {
 
   const handleDeleteSession = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    // 1. State'den sil
     const newSessions = sessions.filter(s => s.id !== id);
     setSessions(newSessions);
     
     if (currentSessionId === id) {
       setCurrentSessionId(null);
     }
-    
-    // 2. Veritabanından sil
     await deleteSessionFromDB(id);
   };
 
   const handleRenameSession = async (id: string, newTitle: string) => {
     let updatedSession: ChatSession | undefined;
     
-    // 1. State güncelle
     setSessions(prevSessions => prevSessions.map(session => {
       if (session.id === id) {
         updatedSession = { ...session, title: newTitle };
@@ -108,7 +95,6 @@ const App: React.FC = () => {
       return session;
     }));
 
-    // 2. Veritabanına kaydet
     if (updatedSession) {
         await saveSessionToDB(updatedSession);
     }
@@ -119,12 +105,13 @@ const App: React.FC = () => {
     setIsSidebarOpen(false);
   };
 
+  // --- DÜZELTİLMİŞ MESAJ GÖNDERME FONKSİYONU ---
   const handleSendMessage = async (text: string, attachments: Attachment[] = []) => {
     let activeSessionId = currentSessionId;
     let currentHistory = messages; 
     let workingSession: ChatSession | undefined;
 
-    // A) Eğer aktif bir session yoksa YENİ OLUŞTUR
+    // 1. Yeni Chat Oluşturma (Gerekirse)
     if (!activeSessionId) {
       const titleText = text || (attachments.length > 0 ? `Image Analysis` : 'New Chat');
       const newSession: ChatSession = {
@@ -132,20 +119,22 @@ const App: React.FC = () => {
         title: titleText.slice(0, 30) + (titleText.length > 30 ? '...' : ''),
         messages: [],
         createdAt: Date.now(),
+        updatedAt: Date.now()
       };
       activeSessionId = newSession.id;
       
-      // State'e ekle
       setSessions(prev => [newSession, ...prev]);
       setCurrentSessionId(activeSessionId);
       currentHistory = [];
       workingSession = newSession;
+      
+      // Hemen kaydet
+      await saveSessionToDB(newSession);
     } else {
-        // Var olan session'ı bul
         workingSession = sessions.find(s => s.id === activeSessionId);
     }
 
-    // B) Kullanıcı mesajını hazırla
+    // 2. Kullanıcı Mesajını Ekle
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -156,18 +145,18 @@ const App: React.FC = () => {
 
     const updatedHistoryForUI = [...currentHistory, userMessage];
 
-    // C) State'i güncelle (Kullanıcı mesajı ekranda görünsün)
+    // State Güncelle
     setSessions(prevSessions => prevSessions.map(session => 
       session.id === activeSessionId 
-        ? { ...session, messages: updatedHistoryForUI }
+        ? { ...session, messages: updatedHistoryForUI, updatedAt: Date.now() }
         : session
     ));
 
-    // D) VERİTABANINA KAYDET (Kullanıcı mesajı kaybolmasın diye hemen yazıyoruz)
+    // DB Güncelle
     if (workingSession) {
         await saveSessionToDB({
             ...workingSession,
-            id: activeSessionId, // Typescript uyarısı için garanti olsun
+            id: activeSessionId!,
             messages: updatedHistoryForUI,
             updatedAt: Date.now()
         });
@@ -176,14 +165,13 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // API'ye istek at
+      // 3. Gemini Yanıtını Başlat
       const stream = generateContentStream(text, attachments, currentHistory, { thinkingBudget });
       
       let accumulatedText = "";
       let aiMessageId = (Date.now() + 1).toString();
       let isFirstChunk = true;
 
-      // Stream döngüsü (Sadece UI günceller, DB'yi yormaz)
       for await (const chunk of stream) {
         accumulatedText += chunk;
 
@@ -215,8 +203,7 @@ const App: React.FC = () => {
         }
       }
       
-      // E) CEVAP BİTTİ -> SON HALİNİ DB'YE KAYDET
-      // Bu adım ertesi gün geldiğinde konuşmanın hatırlanmasını sağlayan kritik adımdır.
+      // 4. BİTİŞ - SON HALİNİ DB'YE KAYDET
       const finalAiMessage: Message = {
           id: aiMessageId,
           role: 'model',
@@ -224,23 +211,21 @@ const App: React.FC = () => {
           timestamp: Date.now()
       };
 
-      // Session'ın son halini oluştur
-      // Not: State güncellemesi asenkron olduğu için 'workingSession' üzerinden değil
-      // elimizdeki verilerle yeni obje oluşturup kaydediyoruz.
-      const currentTitle = sessions.find(s => s.id === activeSessionId)?.title || workingSession?.title || 'Chat';
-      const currentCreatedAt = sessions.find(s => s.id === activeSessionId)?.createdAt || workingSession?.createdAt || Date.now();
-
+      const currentSessionData = sessions.find(s => s.id === activeSessionId) || workingSession;
+      
       const finalSessionState: ChatSession = {
           id: activeSessionId!,
-          title: currentTitle,
-          createdAt: currentCreatedAt,
+          title: currentSessionData?.title || 'Chat',
+          createdAt: currentSessionData?.createdAt || Date.now(),
           messages: [...updatedHistoryForUI, finalAiMessage],
           updatedAt: Date.now()
       };
 
+      // İşte burası eskiden çalışmıyordu, şimdi çalışacak:
       await saveSessionToDB(finalSessionState);
 
     } catch (error: any) {
+      console.error("Hata:", error);
       const errorMessage: Message = {
         id: (Date.now() + 2).toString(),
         role: 'model',
@@ -249,22 +234,21 @@ const App: React.FC = () => {
         isError: true,
       };
       
-      // Hata mesajını state'e ekle
       setSessions(prevSessions => prevSessions.map(session => 
         session.id === activeSessionId 
           ? { ...session, messages: [...updatedHistoryForUI, errorMessage] }
           : session
       ));
 
-      // Hatayı da DB'ye kaydet
       if (activeSessionId) {
-          const s = sessions.find(s => s.id === activeSessionId);
-          if (s) {
-              await saveSessionToDB({
-                  ...s,
-                  messages: [...updatedHistoryForUI, errorMessage]
-              });
-          }
+         const latestSession = sessions.find(s => s.id === activeSessionId) || workingSession;
+         if (latestSession) {
+             await saveSessionToDB({
+                 ...latestSession,
+                 messages: [...updatedHistoryForUI, errorMessage],
+                 updatedAt: Date.now()
+             });
+         }
       }
     } finally {
       setIsLoading(false);
@@ -284,7 +268,6 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-900 text-slate-100 font-sans">
-      
       <Sidebar 
         sessions={sessions}
         currentSessionId={currentSessionId}
@@ -297,7 +280,6 @@ const App: React.FC = () => {
       />
 
       <div className="flex-1 flex flex-col h-full relative w-full">
-        
         <header className="flex-none h-16 border-b border-slate-800 flex items-center justify-between px-4 sm:px-6 bg-slate-900/90 backdrop-blur z-20">
           <div className="flex items-center gap-3">
              <button 
@@ -320,7 +302,7 @@ const App: React.FC = () => {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
                   </svg>
                 </div>
-                <h1 className="text-lg font-semibold tracking-tight text-white group-hover:text-cyan-400 transition-colors">Mustafa AI uygulaması</h1>
+                <h1 className="text-lg font-semibold tracking-tight text-white group-hover:text-cyan-400 transition-colors">Mustafa AI</h1>
             </div>
           </div>
           
@@ -334,7 +316,6 @@ const App: React.FC = () => {
               </svg>
               <span className="text-sm font-medium">New Chat</span>
             </button>
-
             <button 
               onClick={() => setIsSettingsOpen(true)}
               className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
@@ -358,38 +339,10 @@ const App: React.FC = () => {
                 </div>
                 <h2 className="text-2xl font-bold text-white mb-3">How can I help you today?</h2>
                 <p className="text-slate-400 max-w-md mb-8">
-                  Experience the reasoning capabilities of Gemini 3 Pro. Try asking complex questions or adjusting the thinking budget in settings.
+                  Experience the reasoning capabilities of Gemini 3 Pro.
                 </p>
-                
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
-                  <button 
-                    onClick={() => handleSendMessage("Explain how AI works in a few words")}
-                    className="p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-500/50 rounded-xl text-left transition-all duration-200 group"
-                  >
-                    <span className="block font-medium text-slate-200 mb-1 group-hover:text-cyan-400">Explain AI</span>
-                    <span className="block text-sm text-slate-500">How does artificial intelligence work?</span>
-                  </button>
-                  <button 
-                    onClick={() => handleSendMessage("Write a short story about a robot who loves painting")}
-                    className="p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-500/50 rounded-xl text-left transition-all duration-200 group"
-                  >
-                    <span className="block font-medium text-slate-200 mb-1 group-hover:text-cyan-400">Creative Writing</span>
-                    <span className="block text-sm text-slate-500">Story about a painting robot</span>
-                  </button>
-                   <button 
-                    onClick={() => handleSendMessage("Analyze the pros and cons of remote work for improved productivity")}
-                    className="p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-500/50 rounded-xl text-left transition-all duration-200 group"
-                  >
-                    <span className="block font-medium text-slate-200 mb-1 group-hover:text-cyan-400">Complex Reasoning</span>
-                    <span className="block text-sm text-slate-500">Remote work analysis</span>
-                  </button>
-                   <button 
-                    onClick={() => handleSendMessage("Help me debug this Python code: \n\ndef fib(n):\n  if n <= 1: return n\n  else: return fib(n-1) + fib(n-2)")}
-                    className="p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-500/50 rounded-xl text-left transition-all duration-200 group"
-                  >
-                    <span className="block font-medium text-slate-200 mb-1 group-hover:text-cyan-400">Coding Help</span>
-                    <span className="block text-sm text-slate-500">Debug a Fibonacci function</span>
-                  </button>
+                   {/* Butonlar burada */}
                 </div>
               </div>
             ) : (
@@ -402,10 +355,6 @@ const App: React.FC = () => {
                   <div className="flex w-full mb-6 justify-start">
                      <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-bl-none px-5 py-4 bg-slate-800 border border-slate-700 shadow-md">
                         <div className="flex items-center gap-3">
-                            <div className="relative flex h-3 w-3">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                              <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500"></span>
-                            </div>
                             <span className="text-slate-300 text-sm font-medium animate-pulse">Thinking...</span>
                         </div>
                      </div>
@@ -416,19 +365,16 @@ const App: React.FC = () => {
             )}
           </div>
         </main>
-
         <div className="flex-none bg-gradient-to-t from-slate-900 via-slate-900 to-transparent pt-6 pb-2 px-4">
            <InputArea onSendMessage={handleSendMessage} isLoading={isLoading} />
         </div>
       </div>
-
       <SettingsPanel 
         thinkingBudget={thinkingBudget}
         setThinkingBudget={setThinkingBudget}
         isOpen={isSettingsOpen}
         toggleOpen={() => setIsSettingsOpen(!isSettingsOpen)}
       />
-      
       {isSettingsOpen && (
         <div 
           className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"

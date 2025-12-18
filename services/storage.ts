@@ -10,10 +10,7 @@ interface GeminiDB extends DBSchema {
     key: string;
     value: ChatSession;
   };
-  sessions: { // Eski veri tipi (Migration için)
-    key: string;
-    value: ChatSession[];
-  };
+  sessions: { key: string; value: ChatSession[]; }; // Migration için eski tip
 }
 
 let dbPromise: Promise<IDBPDatabase<GeminiDB>>;
@@ -30,11 +27,8 @@ const initDB = () => {
           const oldStore = transaction.objectStore('sessions');
           oldStore.get('all_sessions').then((oldData) => {
             if (Array.isArray(oldData)) {
-              console.log("Eski veriler kurtarılıyor...");
               const newStore = transaction.objectStore(STORE_NAME);
-              oldData.forEach((session) => {
-                newStore.put(session);
-              });
+              oldData.forEach((session) => newStore.put(session));
             }
           });
         }
@@ -50,7 +44,6 @@ export const loadSessionsFromDB = async (): Promise<ChatSession[]> => {
   try {
     const db = await initDB();
     const sessions = await db.getAll(STORE_NAME);
-    // En yeni tarihli en üstte olacak şekilde sırala
     return sessions.sort((a, b) => b.createdAt - a.createdAt);
   } catch (error) {
     console.error("Yükleme hatası:", error);
@@ -58,22 +51,14 @@ export const loadSessionsFromDB = async (): Promise<ChatSession[]> => {
   }
 };
 
-// TEKİL KAYDETME: Sadece gönderilen session'ı günceller. Diğerlerini silmez.
+// TEKİL KAYDETME (Güvenli)
 export const saveSessionToDB = async (session: ChatSession): Promise<void> => {
-  try {
-    const db = await initDB();
-    await db.put(STORE_NAME, session);
-  } catch (error) {
-    console.error("Kaydetme hatası:", error);
-  }
+  const db = await initDB();
+  await db.put(STORE_NAME, session);
 };
 
-// TEKİL SİLME: Sadece bu ID'yi siler.
+// TEKİL SİLME
 export const deleteSessionFromDB = async (id: string): Promise<void> => {
-  try {
-    const db = await initDB();
-    await db.delete(STORE_NAME, id);
-  } catch (error) {
-    console.error("Silme hatası:", error);
-  }
+  const db = await initDB();
+  await db.delete(STORE_NAME, id);
 };
