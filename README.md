@@ -1,1 +1,1 @@
-Read me is updated on 28 October
+README file is updated on 28 October
