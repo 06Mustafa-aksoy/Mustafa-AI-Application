@@ -1,4 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { 
+  Plus, 
+  MessageSquare, 
+  Trash2, 
+  Edit3, 
+  Check, 
+  X, 
+  Bot, 
+  Eye, 
+  Brain, 
+  Search, 
+  Sparkles,
+  ShieldCheck
+} from 'lucide-react';
 import { ChatSession } from '../types';
 
 interface SidebarProps {
@@ -10,6 +24,7 @@ interface SidebarProps {
   onRenameSession: (id: string, newTitle: string) => void;
   isOpen: boolean;
   onClose: () => void;
+  onOpenMemoryHub: (tab?: 'history' | 'memory' | 'backup') => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -20,25 +35,34 @@ const Sidebar: React.FC<SidebarProps> = ({
   onDeleteSession,
   onRenameSession,
   isOpen,
-  onClose
+  onClose,
+  onOpenMemoryHub
 }) => {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [searchFilter, setSearchFilter] = useState('');
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterday = today - (24 * 60 * 60 * 1000);
+  const threeDaysAgo = today - (3 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgo = today - (7 * 24 * 60 * 60 * 1000);
+
+  // Filtered sessions
+  const filteredSessions = sessions.filter(s => 
+    s.title.toLowerCase().includes(searchFilter.toLowerCase()) ||
+    s.messages.some(m => m.text.toLowerCase().includes(searchFilter.toLowerCase()))
+  );
 
   // Group sessions by date
-  const groupedSessions = sessions.slice().reverse().reduce((groups, session) => {
-    const date = new Date(session.createdAt);
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const lastWeek = new Date(today);
-    lastWeek.setDate(lastWeek.getDate() - 7);
+  const groupedSessions = filteredSessions.reduce((groups, session) => {
+    const sessionTime = session.updatedAt || session.createdAt;
 
-    let groupName = 'Older';
-    if (date >= today) groupName = 'Today';
-    else if (date >= yesterday) groupName = 'Yesterday';
-    else if (date >= lastWeek) groupName = 'Previous 7 Days';
+    let groupName = 'Daha Eski';
+    if (sessionTime >= today) groupName = 'Bugün';
+    else if (sessionTime >= yesterday) groupName = 'Dün';
+    else if (sessionTime >= threeDaysAgo) groupName = 'Son 2-3 Gün';
+    else if (sessionTime >= sevenDaysAgo) groupName = 'Son 7 Gün';
 
     if (!groups[groupName]) {
       groups[groupName] = [];
@@ -47,7 +71,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     return groups;
   }, {} as Record<string, ChatSession[]>);
 
-  const groupOrder = ['Today', 'Yesterday', 'Previous 7 Days', 'Older'];
+  const groupOrder = ['Bugün', 'Dün', 'Son 2-3 Gün', 'Son 7 Gün', 'Daha Eski'];
 
   const handleStartEdit = (e: React.MouseEvent, session: ChatSession) => {
     e.stopPropagation();
@@ -63,15 +87,11 @@ const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  const handleCancelEdit = () => {
-    setEditingSessionId(null);
-  };
-
   return (
     <>
       {/* Mobile Overlay */}
       <div 
-        className={`fixed inset-0 bg-black/50 backdrop-blur-sm z-40 md:hidden transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        className={`fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         onClick={onClose}
       />
 
@@ -81,114 +101,190 @@ const Sidebar: React.FC<SidebarProps> = ({
           fixed md:static inset-y-0 left-0 z-50
           w-72 bg-slate-900 border-r border-slate-800
           transform transition-transform duration-300 ease-in-out
-          flex flex-col
+          flex flex-col h-full
           ${isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
         `}
       >
-        {/* Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-            <div 
-                onClick={onNewChat}
-                className="flex-1 flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg cursor-pointer transition-colors group"
+        {/* Header with New Chat */}
+        <div className="p-3 border-b border-slate-800 space-y-2">
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => {
+                onNewChat();
+                if (window.innerWidth < 768) onClose();
+              }}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs shadow-sm transition-all group"
             >
-                <div className="w-6 h-6 rounded bg-cyan-600 flex items-center justify-center group-hover:shadow-lg group-hover:shadow-cyan-900/50 transition-all">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-white">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                    </svg>
-                </div>
-                <span className="font-medium text-sm">New Chat</span>
-            </div>
-            <button onClick={onClose} className="md:hidden p-2 text-slate-400">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
+              <Plus className="w-4 h-4 group-hover:rotate-90 transition-transform" />
+              <span>Yeni Sohbet Başlat</span>
             </button>
+
+            <button 
+              onClick={onClose} 
+              className="md:hidden p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Quick Search */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Sohbetlerde ara..."
+              value={searchFilter}
+              onChange={(e) => setSearchFilter(e.target.value)}
+              className="w-full bg-slate-800/60 border border-slate-700/50 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
         </div>
 
-        {/* List */}
-        <div className="flex-1 overflow-y-auto py-2 px-2 space-y-6 custom-scrollbar">
-            {sessions.length === 0 ? (
-                <div className="text-center text-slate-500 text-sm mt-10 px-4">
-                    <p>No previous chats.</p>
-                    <p className="mt-2 text-xs">Your conversation history will appear here.</p>
-                </div>
-            ) : (
-                groupOrder.map(group => {
-                  const groupSessions = groupedSessions[group];
-                  if (!groupSessions || groupSessions.length === 0) return null;
+        {/* Sessions List */}
+        <div className="flex-1 overflow-y-auto p-2 space-y-4">
+          {filteredSessions.length === 0 ? (
+            <div className="text-center text-slate-500 text-xs py-10 px-4">
+              <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              {searchFilter ? 'Aramaya uygun sohbet bulunamadı.' : 'Henüz sohbet geçmişi yok.'}
+            </div>
+          ) : (
+            groupOrder.map(group => {
+              const groupSessions = groupedSessions[group];
+              if (!groupSessions || groupSessions.length === 0) return null;
 
-                  return (
-                    <div key={group}>
-                      <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-3 mb-2">{group}</h3>
-                      <div className="space-y-1">
-                        {groupSessions.map((session) => (
-                          <div 
-                              key={session.id}
-                              onClick={() => {
-                                  if (editingSessionId !== session.id) {
-                                    onSelectSession(session.id);
-                                    if (window.innerWidth < 768) onClose();
-                                  }
-                              }}
-                              className={`
-                                  group relative flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-all duration-200
-                                  ${currentSessionId === session.id && editingSessionId !== session.id
-                                      ? 'bg-cyan-900/20 text-cyan-400 border border-cyan-500/10' 
-                                      : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-transparent'
-                                  }
-                              `}
-                          >
-                              {editingSessionId === session.id ? (
-                                <form 
-                                  onSubmit={handleSaveEdit} 
-                                  className="flex items-center w-full gap-2"
-                                  onClick={e => e.stopPropagation()}
+              return (
+                <div key={group}>
+                  <div className="flex items-center justify-between px-2 mb-1.5">
+                    <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      {group}
+                    </h3>
+                    <span className="text-[9px] text-slate-400">
+                      {groupSessions.length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1">
+                    {groupSessions.map((session) => {
+                      const isCurrent = currentSessionId === session.id;
+                      const isEditing = editingSessionId === session.id;
+
+                      return (
+                        <div 
+                          key={session.id}
+                          onClick={() => {
+                            if (!isEditing) {
+                              onSelectSession(session.id);
+                              if (window.innerWidth < 768) onClose();
+                            }
+                          }}
+                          className={`
+                            group relative flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer transition-all text-left text-xs
+                            ${isCurrent && !isEditing
+                              ? 'bg-indigo-950/60 text-indigo-200 border border-indigo-500/30 shadow-sm font-medium' 
+                              : 'text-slate-300 hover:bg-slate-800/70 hover:text-white border border-transparent'
+                            }
+                          `}
+                        >
+                          {isEditing ? (
+                            <form 
+                              onSubmit={handleSaveEdit} 
+                              className="flex items-center w-full gap-1.5"
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <input
+                                type="text"
+                                value={editTitle}
+                                onChange={(e) => setEditTitle(e.target.value)}
+                                className="flex-1 bg-slate-950 border border-indigo-500 rounded px-2 py-1 text-xs text-white focus:outline-none"
+                                autoFocus
+                              />
+                              <button type="submit" className="text-emerald-400 p-1 hover:bg-slate-800 rounded">
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                              <button type="button" onClick={() => setEditingSessionId(null)} className="text-slate-400 p-1 hover:bg-slate-800 rounded">
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </form>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-2 truncate flex-1 pr-2">
+                                {session.isAgentSession ? (
+                                  <Bot className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                                ) : (
+                                  <MessageSquare className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 shrink-0" />
+                                )}
+                                <span className="truncate">{session.title || 'Yeni Sohbet'}</span>
+                              </div>
+
+                              {/* Hover actions */}
+                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onOpenMemoryHub('history');
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-indigo-300 hover:bg-slate-700/60 rounded"
+                                  title="Detaylı Önizle"
                                 >
-                                  <input
-                                    type="text"
-                                    value={editTitle}
-                                    onChange={(e) => setEditTitle(e.target.value)}
-                                    className="flex-1 bg-slate-950 border border-cyan-500/50 rounded px-2 py-1 text-sm text-white focus:outline-none"
-                                    autoFocus
-                                    onBlur={handleSaveEdit}
-                                  />
-                                </form>
-                              ) : (
-                                <>
-                                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 flex-shrink-0">
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-                                  </svg>
-                                  <span className="text-sm truncate flex-1 pr-12">{session.title}</span>
-                                  
-                                  <div className="absolute right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button
-                                        onClick={(e) => handleStartEdit(e, session)}
-                                        className="p-1 hover:text-cyan-400 hover:bg-slate-700/50 rounded transition-colors"
-                                        title="Rename Chat"
-                                    >
-                                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
-                                      </svg>
-                                    </button>
-                                    <button
-                                        onClick={(e) => onDeleteSession(session.id, e)}
-                                        className="p-1 hover:text-red-400 hover:bg-slate-700/50 rounded transition-colors"
-                                        title="Delete Chat"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                                          <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                                        </svg>
-                                    </button>
-                                  </div>
-                                </>
-                              )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })
-            )}
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={(e) => handleStartEdit(e, session)}
+                                  className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded"
+                                  title="Yeniden Adlandır"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={(e) => onDeleteSession(session.id, e)}
+                                  className="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-700/60 rounded"
+                                  title="Sil"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Footer: Long-Term Memory & Persistence Center */}
+        <div className="p-3 border-t border-slate-800 bg-slate-900/90 space-y-2">
+          <button
+            onClick={() => onOpenMemoryHub('memory')}
+            className="w-full flex items-center justify-between px-3 py-2.5 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-indigo-500/30 rounded-xl text-xs text-slate-200 transition-all group"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 bg-indigo-500/10 text-indigo-400 rounded-lg group-hover:bg-indigo-500/20 transition-colors">
+                <Brain className="w-4 h-4" />
+              </div>
+              <div className="text-left">
+                <div className="font-semibold text-slate-200 group-hover:text-white flex items-center gap-1.5">
+                  AI Kalıcı Hafıza
+                  <Sparkles className="w-3 h-3 text-amber-400" />
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  Önizle, düzenle & kurallar
+                </div>
+              </div>
+            </div>
+            <Eye className="w-3.5 h-3.5 text-slate-500 group-hover:text-indigo-400" />
+          </button>
+
+          <button
+            onClick={() => onOpenMemoryHub('backup')}
+            className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 rounded-lg transition-colors"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Kalıcı Depolama & Yedek</span>
+          </button>
         </div>
       </div>
     </>

@@ -1,7 +1,10 @@
 {
   "name": "Mustafa AI uygulaması",
-  "description": "An advanced chat interface to explore the capabilities of the Gemini 3 Pro model, featuring thinking budget controls.",
+  "description": "Agent Mode, Long-Term Persistent Memory, and Gemini-powered smart assistant with multi-format processing and history preview.",
   "requestFramePermissions": [
     "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }
